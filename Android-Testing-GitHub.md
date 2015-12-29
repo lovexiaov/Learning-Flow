@@ -105,8 +105,14 @@
 > 用 Python 和 Shell 封装了 Uiautomator 的 API 和一些工具方法。
 > 
 
+### 18. [artem-zinnatullin/qualitymatters](https://github.com/artem-zinnatullin/qualitymatters)
 
-
+> 又一个完整的 Android 应用，其中知识点包括但不限于：
+> 
+> + 持续集成
+> + 单元测试，集成测试，功能（UI）测试
+> + 静态代码分析，代码覆盖率检查
+> + MVP，RxJava，Dagger 2，Retrofit 2
 
 
 
