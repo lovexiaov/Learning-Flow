@@ -114,8 +114,9 @@
 > + 静态代码分析，代码覆盖率检查
 > + MVP，RxJava，Dagger 2，Retrofit 2
 
+### 19. [FutureProcessing/AndroidEspressoIdlingResourcePlayground](https://github.com/FutureProcessing/AndroidEspressoIdlingResourcePlayground)
 
-
+> 该测试工程主要演示了使用 Espresso 测试时等待 UI 响应的解决方案——“IdlingResource”
 
 
 
