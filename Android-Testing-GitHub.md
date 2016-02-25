@@ -119,4 +119,14 @@
 > 该测试工程主要演示了使用 Espresso 测试时等待 UI 响应的解决方案——“IdlingResource”
 
 
+### 20. [Karumi/KataSuperHeroesAndroid](https://github.com/Karumi/KataSuperHeroesAndroid)
 
+> 用 Espresso 测试 UI 的实践工程。
+
+### 21. [txusballesteros/Android-Clean-Testing](https://github.com/txusballesteros/Android-Clean-Testing)
+
+> 该工程中包含了单元测试，集成测试，Instrumentation 测试。
+
+
+
+[TOC]

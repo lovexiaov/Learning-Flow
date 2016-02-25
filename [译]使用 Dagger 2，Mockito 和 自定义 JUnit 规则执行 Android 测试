@@ -1,0 +1,366 @@
+# 使用 Dagger 2，Mockito 和 自定义 JUnit 规则执行 Android 测试
+
+> 原文：[Android testing using Dagger 2, Mockito and a custom JUnit rule](https://medium.com/@fabioCollini/android-testing-using-dagger-2-mockito-and-a-custom-junit-rule-c8487ed01b56#.ytxzk38se)
+> 
+> 作者：[Fabio Collini](https://twitter.com/fabioCollini)
+> 
+> 译者：[lovexiaov](http://www.jianshu.com/users/7378dce2d52c/latest_articles)
+
+依赖注入是得到可测代码的关键概念。使用依赖注入可以方便的用虚拟技术替换真实对象，以改变和验证系统的行为。
+
+[Dagger 2](http://google.github.io/dagger/) 是一个用于许多 Android 工程的依赖注入库，本文我们将会讲解如何利用该库的优势测试 Android 应用。
+
+我们先来开一个简单的例子， `MainService` 类使用其他两个类模拟对一个外部服务的调用并打印结果：
+
+```java
+public class MainService {
+    private RestService restService;
+    private MyPrinter printer;
+
+    @Inject public MainService(RestService restService, 
+            MyPrinter printer) {
+        this.restService = restService;
+        this.printer = printer;
+    }
+
+    public void doSomething() {
+        String s = restService.getSomething();
+        printer.print(s.toUpperCase());
+    }
+}
+```
+
+`doSomething` 方法没有直接的输入和输出，但有了依赖注入和 Mockito，测试该类并不困难。
+
+其他类的实现很简单：
+
+```java
+public class RestService {
+    public String getSomething() {
+        return "Hello world";
+    }
+}
+public class MyPrinter {
+    public void print(String s) {
+        System.out.println(s);
+    }
+}
+```
+
+我们希望独立测试 `MainService`，因此我们不会再这两个类中使用 `Inject` 注解（下文有详细介绍）。我们在 Dagger 模块中实例化它们：
+
+```java
+@Module
+public class MyModule {
+    @Provides @Singleton public RestService provideRestService() {
+        return new RestService();
+    }
+
+    @Provides @Singleton public MyPrinter provideMyPrinter() {
+        return new MyPrinter();
+    }
+}
+```
+
+我们需要一个 Dagger 组件实例化 `MainService` 对象并且注入 Activity：
+
+```java
+@Singleton
+@Component(modules = MyModule.class)
+public interface MyComponent {
+    MainService mainService();
+
+    void inject(MainActivity mainActivity);
+}
+```
+
+## 使用 Mockito 执行 JUnit 测试
+
+使用 Mockito 可以便捷的独立测试 `MainService` 类：
+
+```java
+public class MainServiceTest {
+
+    @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
+
+    @Mock RestService restService;
+
+    @Mock MyPrinter myPrinter;
+
+    @InjectMocks MainService mainService;
+
+    @Test public void testDoSomething() {
+        when(restService.getSomething()).thenReturn("abc");
+
+        mainService.doSomething();
+
+        verify(myPrinter).print("ABC");
+    }
+}
+```
+
+`MockitoRule` 的使用与 `MockitoJUnitRunner` 类似，它调用静态方法 `MockitoAnnotations.initMocks` 填充注解字段。幸好有 `InjectMocks` 注解，`mainService` 对象会自动创建，测试中定义的两个虚拟对象被用来作为构造参数。
+
+
+Dagger 在这种测试中用不到，因为测试非常简单并且是一个纯单元测试。
+
+
+## Dagger 2 测试
+
+有时我们想使用 Dagger 实例化对象来编写高级测试。Artem Zinnatullin 的[这篇文章](http://artemzin.com/blog/jfyi-overriding-module-classes-with-dagger2/) 中介绍了最简单的重写一个对象的方法。按照他的建议我们可以定义一个继承原始 module 的 `TestModule`并且重写方法返回两个虚拟对象：
+
+```java
+public class TestModule extends MyModule {
+    @Override public MyPrinter provideMyPrinter() {
+        return Mockito.mock(MyPrinter.class);
+    }
+
+    @Override public RestService provideRestService() {
+        return Mockito.mock(RestService.class);
+    }
+}
+```
+
+我们还需要一个 `TestComponent` 来注入测试对象：
+
+```java
+@Singleton
+@Component(modules = MyModule.class)
+public interface TestComponent extends MyComponent {
+    void inject(MainServiceDaggerTest test);
+}
+```
+
+该测试类包含3个带 Inject 注解的字段，在 `setUp` 方法中我们创建了 `TestComonent` 并用它注入测试对象来填充字段：
+
+```java
+public class MainServiceDaggerTest {
+
+    @Inject RestService restService;
+
+    @Inject MyPrinter myPrinter;
+
+    @Inject MainService mainService;
+
+    @Before public void setUp() {
+        TestComponent component = DaggerTestComponent.builder()
+            .myModule(new TestModule()).build();
+        component.inject(this);
+    }
+
+    @Test public void testDoSomething() {
+        when(restService.getSomething()).thenReturn("abc");
+
+        mainService.doSomething();
+
+        verify(myPrinter).print("ABC");
+    }
+}
+```
+
+该测试可以执行，但有些地方需要改进：
+
++ `restService` 和 `myPrinter` 字段包含两个虚拟对象，但是使用 `Inject` 注解而不是前面测试中使用的 `Mock` 注解。
++ 需要一个测试 module 和一个测试组件来编写和执行测试。
+
+## DaggerMock：用来覆盖 Dagger 2 对象的 JUnit 规则
+
+Dagger 使用一个注解处理器分析工程中的所有类来查找注解，但前面例子中的 `TestModule` 没有包含任何 Dagger 注解。
+
+[DaggerMock](https://github.com/fabioCollini/DaggerMock) 的基本思想是创建一个动态创建模块子类的 JUnit 规则。 该模块子类中的方法返回在测试对象中定义的虚拟对象。这有点不好解释，我们来看一下最终结果：
+
+```java
+public class MainServiceTest {
+
+    @Rule public DaggerMockRule<MyComponent> mockitoRule = 
+      new DaggerMockRule<>(MyComponent.class, new MyModule())
+        .set(component -> mainService = component.mainService());
+
+    @Mock RestService restService;
+
+    @Mock MyPrinter myPrinter;
+
+    MainService mainService;
+
+    @Test
+    public void testDoSomething() {
+        when(restService.getSomething()).thenReturn("abc");
+
+        mainService.doSomething();
+
+        verify(myPrinter).print("ABC");
+    }
+}
+``` 
+
+在此例中，我们利用规则动态创建了一个返回在测试中定义的虚拟对象的 `MyModule` 的子类，而不是真实的对象。此测试类似于本文中的第一个测试（使用 InjectMocks 注解的那个测试），最大的不同之处在于现在我们使用 Dagger 创建 mainService 字段。使用 `DaggerMockRule` 的其它好处如下：
+
++ 不必将所有测试对象的依赖定义在测试中。当一个依赖对象没有在测试中定义，则使用在 Dagger 配置中定义的对象。
++ 覆盖一个没有直接使用的对象十分简单（例如，当 A 对象引用 B 对象而 B 对象持有 C 对象的引用时，我们只想覆盖 C 对象）。
+
+## Espresso 测试
+
+已经有许多关于 Dagger，Mockito 和 Espresso 集成的文章，例如 [Chui-Ki Chan 的这篇文章](http://blog.sqisland.com/2015/04/dagger-2-espresso-2-mockito.html) 包含了该问题做常见的解决方案。
+
+我们来看另一个例子，在 Activity 中调用之前例子中的方法：
+
+```java
+public class MainActivity extends AppCompatActivity {
+
+    @Inject MainService mainService;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        App app = (App) getApplication();
+        app.getComponent().inject(this);
+
+        mainService.doSomething();
+        //...
+    }
+}
+```
+
+我们可以使用 `ActivityTestRule` 测试该 Activity，该测试与 `MainServiceDaggerTest` 类似（使用了 `TestComponent` 和 `TestModule`）：
+
+```java
+public class MainActivityTest {
+
+    @Rule public ActivityTestRule<MainActivity> activityRule = 
+      new ActivityTestRule<>(MainActivity.class, false, false);
+
+    @Inject RestService restService;
+
+    @Inject MyPrinter myPrinter;
+
+    @Before
+    public void setUp() throws Exception {
+        EspressoTestComponent component = 
+          DaggerEspressoTestComponent.builder()
+            .myModule(new EspressoTestModule()).build();
+
+        getApp().setComponent(component); 
+          
+        component.inject(this);
+    }
+    private App getApp() {
+        return (App) InstrumentationRegistry.getInstrumentation()
+          .getTargetContext().getApplicationContext();
+    }
+    @Test
+    public void testCreateActivity() {
+        when(restService.getSomething()).thenReturn("abc");
+
+        activityRule.launchActivity(null);
+
+        verify(myPrinter).print("ABC");
+    }
+}
+```
+
+## DaggerMock 和 Espresso
+
+这个测试可以简单的使用 `DaggerMockRule`，在 lambda 表达式中我们设置了应用中的组件来使用虚拟对象覆盖 Dagger 对象：
+
+```java
+public class MainActivityTest {
+
+    @Rule public DaggerMockRule<MyComponent> daggerRule = 
+       new DaggerMockRule<>(MyComponent.class, new MyModule())
+         .set(component -> getApp().setComponent(component));
+    @Rule public ActivityTestRule<MainActivity> activityRule = 
+      new ActivityTestRule<>(MainActivity.class, false, false);
+
+    @Mock RestService restService;
+
+    @Mock MyPrinter myPrinter;
+    //...
+}
+```
+
+此规则也可被用在 Robolectric 测试中，在[该工程](https://github.com/fabioCollini/DaggerMock/blob/master/app/src/test/java/it/cosenonjaviste/daggermock/demo/robolectric/MainActivityTest.java) 中有一个例子。
+
+## 自定义规则
+
+相同的规则经常被用于一个工程中的所有测试，我们可以创建一个子类来避免复制和粘贴。例如之前例子中的规则可以写入到一个新类 `MyRule` 中：
+
+```java
+public class MyRule extends DaggerMockRule<MyComponent> {
+    public MyRule() {
+        super(MyComponent.class, new MyModule());
+        set(component -> getApp().setComponent(component));
+    }
+
+    private App getApp() {
+        return (App) InstrumentationRegistry.getInstrumentation()
+          .getTargetContext().getApplicationContext();
+    }
+}
+```
+
+某些情况下我们希望覆盖一个对象，但我们不需要在测试中引用。例如在一个 Espresso 测试中我们不想跟踪对远程服务器事件的分析，我们可以使用虚拟对象解决该问题。若要定义一个自定义对象，我们可以调用基于规则的下列方法之一：
+
++ `provides(Class<T> originalClass, T newObject)`: 使用指定对象覆盖一个类的对象；
++ `provides(Class<T> originalClass, Provider<T> provider)`: 与上一个方法类似，但对非单例对象非常有用；
++ `providesMock(Class<?>… originalClasses)`: 使用作为参数传入的所有虚拟对象覆盖。这是对 `provide(MyObject.class, Mockito.mock(MyObject.class))` 的一种简写形式.
+
+一个使用这些方法自定义规则的例子可以在 [CoseNonJaviste](https://github.com/commit-non-javisti/CoseNonJavisteAndroidApp/blob/master/app/src/androidTest/java/it/cosenonjaviste/ui/CnjDaggerRule.java) 中查看：
+
+```java
+public class CnjDaggerRule 
+        extends DaggerMockRule<ApplicationComponent> {
+    public CnjDaggerRule() {
+        super(ApplicationComponent.class, new AppModule(getApp()));
+        provides(SchedulerManager.class, 
+            new EspressoSchedulerManager());
+        providesMock(WordPressService.class, TwitterService.class);
+        set(component -> getApp().setComponent(component));
+    }
+
+    public static CoseNonJavisteApp getApp() {
+        return (CoseNonJavisteApp) 
+            InstrumentationRegistry.getInstrumentation()
+            .getTargetContext().getApplicationContext();
+    }
+}
+```
+
+最终的 Espresso 测试版本将非常简单（你不必使用 `TestComponent` 或 `TestModule`！）：
+
+```java
+public class MainActivityTest {
+
+    @Rule public MyRule daggerRule = new MyRule();
+
+    @Rule public ActivityTestRule<MainActivity> activityRule = 
+      new ActivityTestRule<>(MainActivity.class, false, false);
+
+    @Mock RestService restService;
+
+    @Mock MyPrinter myPrinter;
+
+    @Test
+    public void testCreateActivity() {
+        when(restService.getSomething()).thenReturn("abc");
+
+        activityRule.launchActivity(null);
+
+        verify(myPrinter).print("ABC");
+    }
+}
+```
+
+DaggerMock 是一个 [GitHub](https://github.com/fabioCollini/DaggerMock) 上的开源工程，你可以使用 [JitPack](https://jitpack.io/#fabioCollini/DaggerMock/) 仓库轻易的将它集成到你的工程中。
+
+
+
+
+
+
+
+
+
+
+
+
